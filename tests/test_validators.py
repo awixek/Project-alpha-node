@@ -36,12 +36,11 @@ from uuid import uuid4
 
 import pytest
 
-from shared.config import AlphaConfig
+from shared.config import AlphaConfig, MissingConfigError
 from shared.constants import FileExtension, MissionStatus, Platform, WorkflowStage
 from shared.exceptions import (
     FileValidationError,
     InputValidationError,
-    MissingConfigError,
     MissionValidationError,
     SchemaValidationError,
     WorkflowValidationError,
