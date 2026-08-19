@@ -6,7 +6,7 @@ from shared.api_router import APIRouter
 from shared.constants import AgentID
 from shared.retry import RetryPolicy
 
-from an01 import (
+from agents/an01 import (
     ProviderSearchItem,
     ProviderSearchResponse,
     ResearchAnalysisConfig,
