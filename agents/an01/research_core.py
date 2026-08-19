@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from an17.dispatcher import AgentExecutionContext
+from agents.an17.dispatcher import AgentExecutionContext
 from shared.constants import AgentID, LogCategory
 from shared.exceptions import AgentExecutionError, AlphaBaseException
 from shared.logger import AlphaLogger, get_agent_logger
