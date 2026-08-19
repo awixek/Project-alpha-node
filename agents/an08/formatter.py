@@ -33,7 +33,10 @@ class SubtitleFormatter:
             def ass_time(x):
                 h=int(x//3600); m=int((x%3600)//60); sec=x%60
                 return f"{h}:{m:02d}:{sec:05.2f}"
-            lines.append(f"Dialogue: 0,{ass_time(s.start_time)},{ass_time(s.end_time)},Default,{s.text.replace(chr(10),'\\N')}")
+            clean_text = s.text.replace('\n', r'\N')
+            lines.append(
+                f"Dialogue: 0,{ass_time(s.start_time)},{ass_time(s.end_time)},Default,{clean_text}"
+            )
         return "\n".join(lines)+"\n"
     def _ttml(self, ss):
         body="".join(f'<p begin="{s.start_time:.3f}s" end="{s.end_time:.3f}s">{escape(s.text)}</p>' for s in ss)
