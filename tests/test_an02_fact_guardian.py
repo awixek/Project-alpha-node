@@ -8,8 +8,8 @@ from shared.constants import AgentID, WorkflowStage
 from shared.retry import RetryPolicy
 from shared.schemas import FactVerdict, SourceRef, SourceReliability
 
-from agents/an01.models import ResearchBatch, ResearchCandidate
-from agents/an02 import (
+from agents.an01.models import ResearchBatch, ResearchCandidate
+from agents.an02 import (
     EvidenceItem,
     FactGuardian,
     FactVerificationCoordinator,
@@ -17,8 +17,8 @@ from agents/an02 import (
     FactVerificationProviderRegistry,
     VerificationStatus,
 )
-from agents/an02.models import FactAnalysisConfig
-from agents/an17.dispatcher import AgentExecutionContext
+from agents.an02.models import FactAnalysisConfig, FactCheckRequest
+from agents.an17.dispatcher import AgentExecutionContext
 
 
 NO_WAIT = RetryPolicy(max_attempts=1, delay_seconds=0, backoff_multiplier=1, timeout_seconds=5)
@@ -107,7 +107,7 @@ def test_fact_guardian_cross_source_verifies_claim():
     registry.register(FakeVerificationProvider("academic", (second,)), priority=2)
 
     report = FactVerificationCoordinator(providers=registry).run(
-        __import__("an02.models", fromlist=["FactCheckRequest"]).FactCheckRequest(
+        FactCheckRequest(
             mission_id=mission_id,
             research=_research(mission_id),
         )
@@ -141,7 +141,7 @@ def test_fact_guardian_preserves_conflicting_evidence():
     registry.register(FakeVerificationProvider("a", (first,)), priority=1)
     registry.register(FakeVerificationProvider("b", (second,)), priority=2)
 
-    from an02.models import FactCheckRequest
+    from agents.an02.models import FactCheckRequest
     report = FactVerificationCoordinator(providers=registry).run(
         FactCheckRequest(mission_id=mission_id, research=_research(mission_id))
     )
@@ -168,7 +168,7 @@ def test_provider_failure_degrades_to_structured_partial_verification():
     registry.register(failing, priority=1)
     registry.register(good, priority=2)
 
-    from agents/an02.models import FactCheckRequest
+    from agents.an02.models import FactCheckRequest
     report = FactVerificationCoordinator(providers=registry).run(
         FactCheckRequest(mission_id=mission_id, research=_research(mission_id))
     )

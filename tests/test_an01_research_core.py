@@ -6,7 +6,7 @@ from shared.api_router import APIRouter
 from shared.constants import AgentID
 from shared.retry import RetryPolicy
 
-from agents/an01 import (
+from agents.an01 import (
     ProviderSearchItem,
     ProviderSearchResponse,
     ResearchAnalysisConfig,
@@ -91,7 +91,7 @@ def test_an17_handler_contract_uses_research_core_agent_id():
     core = ResearchCore(coordinator=ResearchCoordinator(providers=registry))
 
     from shared.schemas import Mission, Topic
-    from an17.dispatcher import AgentExecutionContext
+    from agents.an17.dispatcher import AgentExecutionContext
     from shared.constants import WorkflowStage
 
     mission = Mission(topic=Topic(title="Topic"), requested_by="test")
