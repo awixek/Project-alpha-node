@@ -8,8 +8,8 @@ from shared.constants import AgentID, WorkflowStage
 from shared.retry import RetryPolicy
 from shared.schemas import FactVerdict, SourceRef, SourceReliability
 
-from an01.models import ResearchBatch, ResearchCandidate
-from an02 import (
+from agents/an01.models import ResearchBatch, ResearchCandidate
+from agents/an02 import (
     EvidenceItem,
     FactGuardian,
     FactVerificationCoordinator,
@@ -17,8 +17,8 @@ from an02 import (
     FactVerificationProviderRegistry,
     VerificationStatus,
 )
-from an02.models import FactAnalysisConfig
-from an17.dispatcher import AgentExecutionContext
+from agents/an02.models import FactAnalysisConfig
+from agents/an17.dispatcher import AgentExecutionContext
 
 
 NO_WAIT = RetryPolicy(max_attempts=1, delay_seconds=0, backoff_multiplier=1, timeout_seconds=5)
@@ -168,7 +168,7 @@ def test_provider_failure_degrades_to_structured_partial_verification():
     registry.register(failing, priority=1)
     registry.register(good, priority=2)
 
-    from an02.models import FactCheckRequest
+    from agents/an02.models import FactCheckRequest
     report = FactVerificationCoordinator(providers=registry).run(
         FactCheckRequest(mission_id=mission_id, research=_research(mission_id))
     )
