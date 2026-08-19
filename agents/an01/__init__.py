@@ -1,26 +1,30 @@
-"""AN-02 Fact Guardian public package."""
+"""AN-01 Research Core public package."""
 
-from .fact_guardian import FactGuardian
-from .coordinator import FactVerificationCoordinator
+from .coordinator import ResearchCoordinator
 from .models import (
-    ClaimType,
-    EvidenceItem,
-    FactCheckRequest,
-    FactAnalysisConfig,
-    FactVerificationReport,
-    VerificationStatus,
+    ProviderSearchItem,
+    ProviderSearchRequest,
+    ProviderSearchResponse,
+    ResearchAnalysisConfig,
+    ResearchBatch,
+    ResearchCandidate,
+    ResearchRequest,
+    ResearchScoringWeights,
 )
-from .providers import FactVerificationProvider, FactVerificationProviderRegistry
+from .providers import ResearchProvider, ResearchProviderRegistry
+from .research_core import ResearchCore
 
 __all__ = [
-    "ClaimType",
-    "EvidenceItem",
-    "FactAnalysisConfig",
-    "FactCheckRequest",
-    "FactGuardian",
-    "FactVerificationCoordinator",
-    "FactVerificationProvider",
-    "FactVerificationProviderRegistry",
-    "FactVerificationReport",
-    "VerificationStatus",
+    "ProviderSearchItem",
+    "ProviderSearchRequest",
+    "ProviderSearchResponse",
+    "ResearchAnalysisConfig",
+    "ResearchBatch",
+    "ResearchCandidate",
+    "ResearchCoordinator",
+    "ResearchCore",
+    "ResearchProvider",
+    "ResearchProviderRegistry",
+    "ResearchRequest",
+    "ResearchScoringWeights",
 ]

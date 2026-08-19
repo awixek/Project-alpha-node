@@ -1,190 +1,183 @@
-"""AN-02 verification coordinator."""
+"""Research coordination pipeline for AN-01."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any
+from datetime import timezone
+from typing import Callable
 
-from shared.constants import AgentID, EventName, LogCategory
-from shared.schemas import FactVerdict
+from shared.constants import AgentID, LogCategory
 from shared.event_bus import EventBus, get_event_bus
 from shared.exceptions import AgentExecutionError, AlphaBaseException
 from shared.logger import AlphaLogger, get_agent_logger
 
-from .analysis import extract_claims, verify_claim
-from .models import FactAnalysisConfig, FactCheckRequest, FactVerificationReport, VerifiedClaim
-from .providers import FactVerificationProviderRegistry
+from .analysis import build_candidates, cluster_candidates, merge_duplicates
+from .models import ProviderSearchRequest, ResearchAnalysisConfig, ResearchBatch, ResearchRequest
+from .providers import ResearchProviderRegistry
 
 
-class FactVerificationCoordinator:
-    """Coordinates claim extraction, evidence collection, and deterministic scoring."""
+class ResearchCoordinator:
+    """Coordinates discovery, aggregation, deduplication, clustering and ranking."""
 
     def __init__(
         self,
         *,
-        providers: FactVerificationProviderRegistry,
-        config: FactAnalysisConfig | None = None,
-        event_bus: EventBus | None = None,
+        providers: ResearchProviderRegistry,
+        config: ResearchAnalysisConfig | None = None,
         logger: AlphaLogger | None = None,
+        event_bus: EventBus | None = None,
     ) -> None:
         self._providers = providers
-        self._config = config or FactAnalysisConfig.from_shared_config()
+        self._config = config or ResearchAnalysisConfig.from_shared_config()
+        self._logger = logger or get_agent_logger(AgentID.RESEARCH_CORE)
         self._event_bus = event_bus or get_event_bus()
-        self._logger = logger or get_agent_logger(AgentID.FACT_GUARDIAN)
 
-    def run(self, request: FactCheckRequest) -> FactVerificationReport:
-        started = datetime.now(timezone.utc)
-        self._event_bus.emit(
-            EventName.AGENT_STARTED,
+    def run(self, request: ResearchRequest) -> ResearchBatch:
+        """Execute a complete research discovery pass with graceful degradation."""
+        self._logger.info(
+            "Research started.",
+            category=LogCategory.AGENT,
+            agent_id=AgentID.RESEARCH_CORE,
             mission_id=request.mission_id,
-            agent_id=AgentID.FACT_GUARDIAN,
-            payload={"operation": "verification"},
+            metadata={"keyword_count": len(request.keywords)},
+        )
+        query = self._build_query(request)
+        provider_request = ProviderSearchRequest(
+            mission_id=request.mission_id,
+            query=query,
+            language=request.language,
+            platform=request.platform,
+            time_window_start=request.time_window_start,
+            time_window_end=request.time_window_end,
+            search_config=request.search_config,
+            constraints=request.constraints,
+        )
+
+        if not self._providers.provider_names:
+            raise AgentExecutionError(
+                "Research Core has no registered providers.",
+                agent_id=AgentID.RESEARCH_CORE,
+                mission_id=request.mission_id,
+                context={"operation": "research"},
+            )
+
+        responses = {}
+        failures = {}
+        for provider_name in self._providers.provider_names:
+            self._logger.info(
+                "Research provider request started.",
+                category=LogCategory.API,
+                agent_id=AgentID.RESEARCH_CORE,
+                mission_id=request.mission_id,
+                metadata={"provider": provider_name},
+            )
+            try:
+                response = self._providers.search_provider(provider_name, provider_request)
+                responses[provider_name] = response
+            except Exception as exc:  # provider failure is isolated by design
+                failures[provider_name] = str(exc)
+                self._logger.warning(
+                    "Research provider failed; continuing with remaining providers.",
+                    category=LogCategory.API,
+                    agent_id=AgentID.RESEARCH_CORE,
+                    mission_id=request.mission_id,
+                    metadata={"provider": provider_name, "error": str(exc)},
+                )
+        self._logger.info(
+            "Research provider collection completed.",
+            category=LogCategory.API,
+            agent_id=AgentID.RESEARCH_CORE,
+            mission_id=request.mission_id,
+            metadata={
+                "providers_attempted": len(self._providers.provider_names),
+                "providers_succeeded": len(responses),
+                "provider_failures": len(failures),
+            },
+        )
+
+        items = [item for response in responses.values() for item in response.items]
+        if request.time_window_start or request.time_window_end:
+            filtered = []
+            for item in items:
+                if item.published_at is None:
+                    filtered.append(item)
+                    continue
+                published_at = item.published_at
+                if published_at.tzinfo is None:
+                    published_at = published_at.replace(tzinfo=timezone.utc)
+                if request.time_window_start and published_at < request.time_window_start:
+                    continue
+                if request.time_window_end and published_at > request.time_window_end:
+                    continue
+                filtered.append(item)
+            items = filtered
+            self._logger.info(
+                "Research time-window filtering completed.",
+                category=LogCategory.QUALITY,
+                agent_id=AgentID.RESEARCH_CORE,
+                mission_id=request.mission_id,
+                metadata={"remaining_results": len(items)},
+            )
+        self._logger.info(
+            "Research results received.",
+            category=LogCategory.AGENT,
+            agent_id=AgentID.RESEARCH_CORE,
+            mission_id=request.mission_id,
+            metadata={"raw_result_count": len(items)},
+        )
+        groups, removed = merge_duplicates(items, self._config)
+        self._logger.info(
+            "Research duplicate removal completed.",
+            category=LogCategory.QUALITY,
+            agent_id=AgentID.RESEARCH_CORE,
+            mission_id=request.mission_id,
+            metadata={"duplicates_removed": removed, "unique_groups": len(groups)},
+        )
+        clusters = cluster_candidates(groups, self._config)
+        self._logger.info(
+            "Research clustering completed.",
+            category=LogCategory.AGENT,
+            agent_id=AgentID.RESEARCH_CORE,
+            mission_id=request.mission_id,
+            metadata={"cluster_count": len(clusters)},
+        )
+        candidates = build_candidates(
+            groups,
+            clusters=clusters,
+            mission_id=request.mission_id,
+            query=query,
+            config=self._config,
         )
         self._logger.info(
-            "Fact Guardian verification started.",
-            category=LogCategory.AGENT,
-            agent_id=AgentID.FACT_GUARDIAN,
+            "Research ranking completed.",
+            category=LogCategory.QUALITY,
+            agent_id=AgentID.RESEARCH_CORE,
             mission_id=request.mission_id,
+            metadata={"candidate_count": len(candidates)},
         )
-        try:
-            claims, research_sources, research_id = extract_claims(
-                request.research,
-                max_claims=self._config.max_claims,
-            )
-            self._logger.info(
-                "Fact Guardian claim extraction completed.",
-                category=LogCategory.QUALITY,
-                agent_id=AgentID.FACT_GUARDIAN,
-                mission_id=request.mission_id,
-                metadata={"claims_extracted": len(claims)},
-            )
+        result = ResearchBatch(
+            mission_id=request.mission_id,
+            query=query,
+            candidates=candidates,
+            providers_attempted=list(self._providers.provider_names),
+            providers_succeeded=sorted(responses),
+            provider_failures=failures,
+        )
+        self._logger.info(
+            "Research completed.",
+            category=LogCategory.AGENT,
+            agent_id=AgentID.RESEARCH_CORE,
+            mission_id=request.mission_id,
+            metadata={"candidate_count": len(candidates)},
+        )
+        return result
 
-            verified: list[VerifiedClaim] = []
-            all_failures: dict[str, str] = {}
-            for claim in claims:
-                self._logger.info(
-                    "Fact Guardian requesting evidence.",
-                    category=LogCategory.API,
-                    agent_id=AgentID.FACT_GUARDIAN,
-                    mission_id=request.mission_id,
-                    metadata={"claim": claim[:200]},
-                )
-                responses, failures = self._providers.verify_all(claim)
-                all_failures.update(failures)
-                evidence = [item for response in responses.values() for item in response]
-                self._logger.info(
-                    "Fact Guardian evidence collected.",
-                    category=LogCategory.QUALITY,
-                    agent_id=AgentID.FACT_GUARDIAN,
-                    mission_id=request.mission_id,
-                    metadata={"evidence_count": len(evidence), "provider_failures": len(failures)},
-                )
-                result = verify_claim(claim, evidence, config=self._config)
-                if result.conflicting_sources:
-                    self._logger.warning(
-                        "Fact Guardian contradiction detected.",
-                        category=LogCategory.QUALITY,
-                        agent_id=AgentID.FACT_GUARDIAN,
-                        mission_id=request.mission_id,
-                        metadata={"claim": claim[:200], "severity": result.contradiction_severity},
-                    )
-                self._logger.info(
-                    "Fact Guardian confidence calculated.",
-                    category=LogCategory.QUALITY,
-                    agent_id=AgentID.FACT_GUARDIAN,
-                    mission_id=request.mission_id,
-                    metadata={
-                        "confidence": result.confidence,
-                        "reliability": result.reliability_score,
-                        "status": result.verification_status.value,
-                    },
-                )
-                verified.append(result)
-
-            if not claims:
-                report = FactVerificationReport(
-                    mission_id=request.mission_id,
-                    source_research_id=research_id,
-                    claims=[],
-                    overall_reliability_score=0.0,
-                    verification_confidence=0.0,
-                    overall_pass=False,
-                    manual_review_required=True,
-                    provider_failures=all_failures,
-                    claims_extracted=0,
-                    claims_verified=0,
-                    score_breakdown={},
-                )
-            else:
-                reliability = sum(item.reliability_score for item in verified) / len(verified)
-                confidence = sum(item.confidence for item in verified) / len(verified)
-                manual_review = any(item.manual_review_required for item in verified)
-                passed = all(
-                    item.verdict in {FactVerdict.VERIFIED_TRUE, FactVerdict.OPINION}
-                    and not item.manual_review_required
-                    for item in verified
-                )
-                if all_failures:
-                    manual_review = True
-                report = FactVerificationReport(
-                    mission_id=request.mission_id,
-                    source_research_id=research_id,
-                    claims=verified,
-                    overall_reliability_score=reliability,
-                    verification_confidence=confidence,
-                    overall_pass=passed,
-                    manual_review_required=manual_review,
-                    provider_failures=all_failures,
-                    claims_extracted=len(claims),
-                    claims_verified=sum(
-                        item.verification_status.value in {"verified", "partially_verified"}
-                        for item in verified
-                    ),
-                    checked_at=datetime.now(timezone.utc),
-                    score_breakdown={
-                        "average_reliability": reliability,
-                        "average_confidence": confidence,
-                        "provider_degradation": 1.0 if all_failures else 0.0,
-                    },
-                )
-
-            self._event_bus.emit(
-                EventName.AGENT_COMPLETED,
-                mission_id=request.mission_id,
-                agent_id=AgentID.FACT_GUARDIAN,
-                payload={"claims": str(len(report.claims)), "overall_pass": str(report.overall_pass)},
-            )
-            self._logger.info(
-                "Fact Guardian verification completed.",
-                category=LogCategory.AGENT,
-                agent_id=AgentID.FACT_GUARDIAN,
-                mission_id=request.mission_id,
-                metadata={
-                    "claims": len(report.claims),
-                    "overall_pass": report.overall_pass,
-                    "duration_ms": int((datetime.now(timezone.utc) - started).total_seconds() * 1000),
-                },
-            )
-            return report
-        except AlphaBaseException:
-            raise
-        except Exception as exc:  # noqa: BLE001 - coordinator failure boundary
-            self._logger.exception(
-                "Unexpected Fact Guardian verification failure.",
-                category=LogCategory.ERROR,
-                agent_id=AgentID.FACT_GUARDIAN,
-                mission_id=request.mission_id,
-            )
-            self._event_bus.emit(
-                EventName.AGENT_FAILED,
-                mission_id=request.mission_id,
-                agent_id=AgentID.FACT_GUARDIAN,
-                payload={"operation": "verification"},
-            )
+    @staticmethod
+    def _build_query(request: ResearchRequest) -> str:
+        parts = list(request.keywords)
+        if not parts:
             raise AgentExecutionError(
-                "Fact Guardian verification failed unexpectedly.",
-                agent_id=AgentID.FACT_GUARDIAN,
+                "Research request must contain at least one keyword.",
+                agent_id=AgentID.RESEARCH_CORE,
                 mission_id=request.mission_id,
-                retryable=True,
-                context={"operation": "run"},
-                cause=exc,
-            ) from exc
+                context={"operation": "build_query"},
+            )
+        return " ".join(dict.fromkeys(part.strip() for part in parts if part.strip()))

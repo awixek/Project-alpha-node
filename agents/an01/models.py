@@ -1,171 +1,185 @@
-"""AN-02 contracts built around the frozen Shared Foundation schemas."""
+"""AN-01 research contracts and structured result models."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
 from typing import Any, Mapping
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from shared.constants import AgentID
-from shared.schemas import FactCheckClaim, FactVerdict, SourceRef
+from shared.constants import AgentID, Platform
+from shared.schemas import SourceRef
 
 
-class ClaimType(str, Enum):
-    """Deterministic factual claim categories."""
-
-    FACT = "fact"
-    STATISTIC = "statistic"
-    DATE = "date"
-    QUOTE = "quote"
-    OPINION = "opinion"
-    PREDICTION = "prediction"
-
-
-class VerificationStatus(str, Enum):
-    """Detailed AN-02 verification state."""
-
-    VERIFIED = "verified"
-    PARTIALLY_VERIFIED = "partially_verified"
-    CONTRADICTED = "contradicted"
-    UNSUPPORTED = "unsupported"
-    OUTDATED = "outdated"
-    UNVERIFIABLE = "unverifiable"
-    OPINION = "opinion"
-
-
-class EvidenceItem(BaseModel):
-    """Normalized provider evidence returned through the AN-02 provider boundary."""
-
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    claim: str = Field(..., min_length=1)
-    source: SourceRef
-    excerpt: str = ""
-    evidence_statement: str = ""
-    supports_claim: bool | None = None
-    retrieved_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    provider: str = Field(default="unknown", min_length=1)
-    evidence_quality: float = Field(default=0.5, ge=0.0, le=1.0)
-
-
-class VerifiedClaim(FactCheckClaim):
-    """Extended Shared FactCheckClaim carrying AN-02 explainability fields."""
-
-    claim_type: ClaimType
-    verification_status: VerificationStatus
-    conflicting_sources: list[SourceRef] = Field(default_factory=list)
-    evidence_summary: str = ""
-    verification_notes: list[str] = Field(default_factory=list)
-    verification_timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    reliability_score: float = Field(default=0.0, ge=0.0, le=1.0)
-    manual_review_required: bool = False
-    evidence_quality: float = Field(default=0.0, ge=0.0, le=1.0)
-    independent_confirmations: int = Field(default=0, ge=0)
-    contradiction_severity: float = Field(default=0.0, ge=0.0, le=1.0)
-
-
-class FactVerificationReport(BaseModel):
-    """Structured AN-02 output returned to AN-17."""
-
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    agent_id: AgentID = AgentID.FACT_GUARDIAN
-    mission_id: UUID
-    source_research_id: UUID | None = None
-    claims: list[VerifiedClaim] = Field(default_factory=list)
-    overall_reliability_score: float = Field(..., ge=0.0, le=1.0)
-    verification_confidence: float = Field(..., ge=0.0, le=1.0)
-    overall_pass: bool
-    manual_review_required: bool
-    checked_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    provider_failures: dict[str, str] = Field(default_factory=dict)
-    claims_extracted: int = Field(default=0, ge=0)
-    claims_verified: int = Field(default=0, ge=0)
-    score_breakdown: dict[str, float] = Field(default_factory=dict)
-
-
-class FactCheckRequest(BaseModel):
-    """Provider-neutral AN-02 input."""
+class ResearchRequest(BaseModel):
+    """Validated input envelope for one Research Core execution."""
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     mission_id: UUID
-    research: Any
     language: str = Field(default="en", min_length=1, max_length=32)
+    platform: Platform | None = None
+    keywords: list[str] = Field(default_factory=list)
+    time_window_start: datetime | None = None
+    time_window_end: datetime | None = None
+    search_config: dict[str, Any] = Field(default_factory=dict)
+    constraints: dict[str, str] = Field(default_factory=dict)
+
+
+class ProviderSearchRequest(BaseModel):
+    """Provider-neutral request passed through the shared API router."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    mission_id: UUID
+    query: str = Field(..., min_length=1, max_length=2000)
+    language: str = Field(default="en", min_length=1, max_length=32)
+    platform: Platform | None = None
+    time_window_start: datetime | None = None
+    time_window_end: datetime | None = None
     search_config: dict[str, Any] = Field(default_factory=dict)
     constraints: dict[str, str] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
-class FactScoringWeights:
-    """Configurable reliability weights."""
+class ProviderSearchItem:
+    """Normalized item returned by a concrete provider adapter."""
 
-    source_authority: float = 0.20
-    independent_confirmations: float = 0.20
-    evidence_consistency: float = 0.20
-    freshness: float = 0.10
-    citation_quality: float = 0.10
-    official_source: float = 0.10
-    contradiction_severity: float = 0.10
-
-    def normalized(self) -> "FactScoringWeights":
-        values = {
-            "source_authority": self.source_authority,
-            "independent_confirmations": self.independent_confirmations,
-            "evidence_consistency": self.evidence_consistency,
-            "freshness": self.freshness,
-            "citation_quality": self.citation_quality,
-            "official_source": self.official_source,
-            "contradiction_severity": self.contradiction_severity,
-        }
-        if any(value < 0 for value in values.values()):
-            raise ValueError("Fact scoring weights cannot be negative.")
-        total = sum(values.values())
-        if total <= 0:
-            raise ValueError("At least one fact scoring weight must be positive.")
-        return FactScoringWeights(**{key: value / total for key, value in values.items()})
+    title: str
+    summary: str
+    url: str
+    publisher: str | None = None
+    published_at: datetime | None = None
+    reliability: str = "unverified"
+    keywords: tuple[str, ...] = ()
+    provider: str = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
-class FactAnalysisConfig:
-    """AN-02 settings loaded from agents['AN-02'].settings."""
+class ProviderSearchResponse:
+    """Provider response normalized before research analysis."""
 
-    weights: FactScoringWeights = field(default_factory=FactScoringWeights)
-    freshness_half_life_hours: float = 720.0
-    min_verification_confidence: float = 0.70
-    min_reliability_score: float = 0.70
-    manual_review_on_single_source: bool = True
-    manual_review_on_conflict: bool = True
-    max_claims: int = 100
+    provider: str
+    items: tuple[ProviderSearchItem, ...]
+    retrieved_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ResearchCandidate(BaseModel):
+    """Ranked research candidate returned by AN-01."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    candidate_id: UUID = Field(default_factory=uuid4)
+    mission_id: UUID
+    title: str = Field(..., min_length=1)
+    summary: str = ""
+    sources: list[SourceRef] = Field(default_factory=list)
+    confidence_score: float = Field(..., ge=0.0, le=1.0)
+    freshness_score: float = Field(..., ge=0.0, le=1.0)
+    authority_score: float = Field(..., ge=0.0, le=1.0)
+    relevance_score: float = Field(..., ge=0.0, le=1.0)
+    information_completeness: float = Field(..., ge=0.0, le=1.0)
+    cross_source_confirmation: float = Field(..., ge=0.0, le=1.0)
+    source_diversity: float = Field(..., ge=0.0, le=1.0)
+    overall_priority_score: float = Field(..., ge=0.0, le=1.0)
+    discovery_timestamp: datetime
+    cluster_id: str
+    supporting_providers: list[str] = Field(default_factory=list)
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
+
+
+class ResearchBatch(BaseModel):
+    """Complete structured output of one Research Core run."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agent_id: AgentID = AgentID.RESEARCH_CORE
+    mission_id: UUID
+    query: str
+    candidates: list[ResearchCandidate] = Field(default_factory=list)
+    providers_attempted: list[str] = Field(default_factory=list)
+    providers_succeeded: list[str] = Field(default_factory=list)
+    provider_failures: dict[str, str] = Field(default_factory=dict)
+    discovered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchScoringWeights:
+    """Configurable scoring weights. Values are normalized at validation time."""
+
+    freshness: float = 0.15
+    authority: float = 0.20
+    cross_source_confirmation: float = 0.20
+    relevance: float = 0.20
+    information_completeness: float = 0.10
+    source_diversity: float = 0.05
+    confidence: float = 0.10
+
+    def normalized(self) -> "ResearchScoringWeights":
+        values = {
+            "freshness": self.freshness,
+            "authority": self.authority,
+            "cross_source_confirmation": self.cross_source_confirmation,
+            "relevance": self.relevance,
+            "information_completeness": self.information_completeness,
+            "source_diversity": self.source_diversity,
+            "confidence": self.confidence,
+        }
+        if any(value < 0 for value in values.values()):
+            raise ValueError("Research scoring weights cannot be negative.")
+        total = sum(values.values())
+        if total <= 0:
+            raise ValueError("At least one research scoring weight must be positive.")
+        normalized = {key: value / total for key, value in values.items()}
+        return ResearchScoringWeights(**normalized)
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchAnalysisConfig:
+    """Runtime-tunable research analysis settings.
+
+    When no explicit object is supplied, Research Core reads the generic
+    ``agents["AN-01"].settings`` bucket from the frozen shared config.
+    This keeps deployment configuration in the Shared Configuration layer
+    without requiring a Shared Foundation schema change.
+    """
+
+    near_duplicate_threshold: float = 0.86
+    cluster_threshold: float = 0.62
+    freshness_half_life_hours: float = 72.0
+    max_candidates: int = 25
+    weights: ResearchScoringWeights = field(default_factory=ResearchScoringWeights)
+    publisher_authority: Mapping[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if not 0.0 <= self.near_duplicate_threshold <= 1.0:
+            raise ValueError("near_duplicate_threshold must be between 0 and 1.")
+        if not 0.0 <= self.cluster_threshold <= 1.0:
+            raise ValueError("cluster_threshold must be between 0 and 1.")
         if self.freshness_half_life_hours <= 0:
             raise ValueError("freshness_half_life_hours must be positive.")
-        for name in ("min_verification_confidence", "min_reliability_score"):
-            value = getattr(self, name)
-            if not 0.0 <= value <= 1.0:
-                raise ValueError(f"{name} must be between 0 and 1.")
-        if self.max_claims < 1:
-            raise ValueError("max_claims must be at least 1.")
+        if self.max_candidates < 1:
+            raise ValueError("max_candidates must be at least 1.")
 
     @classmethod
-    def from_shared_config(cls) -> "FactAnalysisConfig":
+    def from_shared_config(cls) -> "ResearchAnalysisConfig":
+        """Build settings from the generic frozen Shared Config agent bucket."""
         from shared.config import get_config
 
-        settings = get_config().agents.get(AgentID.FACT_GUARDIAN.value)
-        values = dict(settings.settings) if settings else {}
+        settings = get_config().agents.get(AgentID.RESEARCH_CORE.value)
+        values = dict(settings.settings) if settings is not None else {}
         defaults = cls()
         weight_values = dict(values.get("weights", {}))
-        weights = FactScoringWeights(**weight_values) if weight_values else defaults.weights
+        weights = ResearchScoringWeights(**weight_values) if weight_values else defaults.weights
         return cls(
-            weights=weights,
+            near_duplicate_threshold=float(values.get("near_duplicate_threshold", defaults.near_duplicate_threshold)),
+            cluster_threshold=float(values.get("cluster_threshold", defaults.cluster_threshold)),
             freshness_half_life_hours=float(values.get("freshness_half_life_hours", defaults.freshness_half_life_hours)),
-            min_verification_confidence=float(values.get("min_verification_confidence", defaults.min_verification_confidence)),
-            min_reliability_score=float(values.get("min_reliability_score", defaults.min_reliability_score)),
-            manual_review_on_single_source=bool(values.get("manual_review_on_single_source", defaults.manual_review_on_single_source)),
-            manual_review_on_conflict=bool(values.get("manual_review_on_conflict", defaults.manual_review_on_conflict)),
-            max_claims=int(values.get("max_claims", defaults.max_claims)),
+            max_candidates=int(values.get("max_candidates", defaults.max_candidates)),
+            weights=weights,
+            publisher_authority={
+                str(key): float(value)
+                for key, value in dict(values.get("publisher_authority", {})).items()
+            },
         )
